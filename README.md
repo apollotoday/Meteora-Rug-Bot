@@ -1,8 +1,14 @@
 # Meteora Bundler Launch
 
-**Meteora DAMM v2 + Alpha Vault (FCFS) launch toolkit** for teams that run **high wallet-count bundlers**—dozens to **100+ participant wallets**—around a single controlled token launch. This repository is the **on-chain launch spine**: mint the token, create the **custom pool** wired for Alpha Vault, then attach the **FCFS vault**. Distribution, deposits, fills, monitoring, and post-launch “farming” loops are usually orchestrated by your **bundler ops stack** (dashboard, scripts, or workers); this project keeps the **Meteora primitives** repeatable and env-driven.
+**Meteora DAMM v2 + Alpha Vault (FCFS) launch toolkit** for teams that run **large wallet-count bundlers**—from a handful to **100+ wallets, and well beyond** (there is no hard cap in the tooling; set `DISTRIBUTE_NUM` to match your bundle size). This repository is the **on-chain launch spine**: mint the token, create the **custom pool** wired for Alpha Vault, then attach the **FCFS vault**. The same **distribution wallet fleet** is what you use for **vault deposits, claims, bulk exits (`sell:all`), and downstream farming** (LP positions, incentive claims, volume and sweeps)—while your **bundler ops stack** (dashboard, workers, schedulers) runs the longer-lived loops; this project keeps the **Meteora primitives** repeatable and env-driven.
 
-> **Goal:** Launch with a fair timetable (delayed activation, caps), fee structure suited to **ongoing trading and LP fee capture**, and artifacts (`data/*.json`) your downstream automation can consume for **volume, sweeps, and profit realization** across many wallets.
+> **Goal:** Launch with a fair timetable (delayed activation, caps), fee structure suited to **ongoing trading and LP fee capture**, and artifacts (`data/*.json`) your downstream automation can consume for **volume, sweeps, farming, and profit realization** across **large wallet sets** (100+ is a common target; scale `DISTRIBUTE_NUM` as needed).
+
+### 100+ wallet bundles and farming with the same wallets
+
+- **Bundle size:** Use `DISTRIBUTE_NUM` (or aliases) for **10, 100, 200+** keys—the flows are the same; scale **main-wallet SOL**, **RPC throughput**, and optional **`DISTRIBUTION_TX_DELAY_*`** so bursts stay within your provider limits.
+- **Launch path:** `distribute:from-main` materializes the fleet (keystore + `LAUNCH_STATE_PATH`); `deposit:vault` and `claim:tokens` walk **every** distribution signer so large bundles stay in sync with one pool and one vault.
+- **Farming / post-launch:** After activation and claims, you typically **farm with this same key set**: e.g. holding or rotating base through **`npm run sell:all`**, plus **LP fee harvesting**, **reward programs**, and **scheduled buys/sells** per wallet in your own automation—the repo hands you one **canonical pool address**, **vault timing**, and **all secret keys** in the keystore for those workers to target.
 
 ### Sample token — rug-pool style example (reference)
 
@@ -16,7 +22,7 @@ Example Solana meme token page on Axiom (mint `CDprTdvzeXtRvovZHi5g8b763LWsXJbjd
 
 ## Why bundlers use this stack
 
-- **Many wallets (100+):** This repo **creates or reuses** a keystore of `DISTRIBUTE_NUM` keys, funds them from the **main** `WALLET_SECRET_KEY`, and uses them for **FCFS deposits** and **claims**. Downstream you can still add privacy hops, dashboards, or workers on top of `data/latest-launch-state.json` and the keystore.
+- **Many wallets (100+ and beyond):** This repo **creates or reuses** a keystore of `DISTRIBUTE_NUM` keys (no fixed upper bound—**100+ wallet bundles** are explicitly supported), funds them from the **main** `WALLET_SECRET_KEY`, and uses them for **FCFS deposits** and **claims**. The same keys are the natural unit for **farming** and **bulk `sell:all`** once your external runners connect to the keystore and launch state.
 - **Farming & profit:** After go-live, typical objectives are **organic-looking flow**, **reward harvesting** (LP fees, incentives), and **consolidation** to treasury or “profit” wallets. A **dynamic fee layer on top of a scheduled base fee** keeps short-term MEV and toxic flow more expensive while longer-hold reads cleaner—supporting sustained activity without giving away the entire curve on block zero.
 - **Dynamic fee + fixed base fee (Meteora pattern):** Pool creation here uses Meteora’s **time-scheduled base fee** (`FeeTimeSchedulerExponential`) **plus** optional **dynamic fee** (`POOL_ENABLE_DYNAMIC_FEE`, `POOL_DYNAMIC_BASE_FEE_BPS`). That combination:
   - caps runaway fee spikes via a **stable base schedule**;
@@ -34,7 +40,7 @@ Example Solana meme token page on Axiom (mint `CDprTdvzeXtRvovZHi5g8b763LWsXJbjd
 |--------|------|
 | `npm run start` | **End-to-end:** mint → fund `DISTRIBUTE_NUM` wallets from the main key → DAMM v2 custom pool (Alpha) → FCFS Alpha Vault → sync `data/latest-launch-state.json` → wait for deposit window → **deposit from each distribution wallet** → wait for vesting → **claim** tokens to those wallets. |
 | `npm run dev` | Same as `start`, re-runs on file changes (`tsx watch`). |
-| `npm run sell:all` | **After** claims (or whenever wallets hold token A), market-sell **all token A** from every distribution wallet on the Meteora CP-AMM pool (slippage / retry knobs via env—see below). |
+| `npm run sell:all` | **After** claims (or whenever wallets hold token A), market-sell **all token A** from **every** distribution wallet on the Meteora CP-AMM pool—built for **large fleets** (concurrency/stagger via env). Pair with your own farming jobs for LP and rewards on the same wallet set. |
 
 ### Individual steps (same modules `start` calls)
 
@@ -137,7 +143,7 @@ Use **`DRY_RUN=true`** on **pool/vault** scripts while iterating; set **`false`*
 - `POOL_DYNAMIC_BASE_FEE_BPS` — base point for the dynamic curve.
 - `POOL_COLLECT_FEE_MODE` — `0` BothToken / `1` OnlyB (match your **CONFIG**; affects where fees accrue).
 
-- `DISTRIBUTE_NUM` — Count of distribution wallets (aliases: `DISTRIBUTION_WALLET_COUNT`, `BUNDLE_DISTRIBUTE_NUM`).
+- `DISTRIBUTE_NUM` — Count of distribution wallets (aliases: `DISTRIBUTION_WALLET_COUNT`, `BUNDLE_DISTRIBUTE_NUM`). Use **100+** (or more) for large bundles; plan funding and RPC accordingly.
 - `DISTRIBUTION_SOL_PER_WALLET_LAMPORTS` **or** `DISTRIBUTION_TOTAL_SOL_LAMPORTS` — SOL per wallet for fees + vault deposit (WSOL quote path deposits “all minus buffer” on-chain).
 - `BUNDLE_DISTRIBUTE_TOKEN_RAW_TOTAL` — Optional: total base token (raw) split evenly from main to each wallet (for later sells or inventory).
 - `DISTRIBUTION_WALLETS_KEYSTORE_PATH`, `LAUNCH_STATE_PATH` — Keystore + merged launch JSON for deposit/claim.
@@ -158,15 +164,15 @@ Use **`DRY_RUN=true`** on **pool/vault** scripts while iterating; set **`false`*
 
 ---
 
-## Operating model for 100+ wallets
+## Operating model for 100+ wallets and farming
 
 1. **Launch** with `npm run start` or the stepwise scripts; freeze `POOL_ADDRESS`, vault, and activation time in your ops DB.
-2. **Distribution wallets** live in `DISTRIBUTION_WALLETS_KEYSTORE_PATH` and are mirrored in `LAUNCH_STATE_PATH` for deposit/claim bookkeeping.
+2. **Distribution wallets** live in `DISTRIBUTION_WALLETS_KEYSTORE_PATH` and are mirrored in `LAUNCH_STATE_PATH` for deposit/claim bookkeeping—this is the **same fleet** you will use for **farming** and coordinated exits unless you rotate keys off-chain.
 3. **Deposit / trade** only inside published windows; respect cap and whitelist rules or you will waste txs.
-4. **After activation**, run your farming policy:
-   - scale in/out across wallets to avoid obvious clustering;
-   - **claim LP fees** and rewards on a schedule aligned to gas and RPC rate limits;
-   - sweep to cold or profit wallets with audit trails.
+4. **After activation**, run your **farming policy** across the bundle:
+   - spread flow across many signers so activity does not collapse into a single obvious wallet;
+   - **claim LP fees**, **farm incentives**, and run **volume / rebalance** jobs on a schedule that respects RPC rate limits;
+   - use **`npm run sell:all`** when you want a **pooled exit** from token A on the Meteora pool; sweep proceeds to treasury or cold storage with audit trails.
 5. **Fees:** Re-read Meteora’s pool fee docs whenever you change `CONFIG_ADDRESS` or fee envs—misaligned `collectFeeMode` vs config is a common foot-gun.
 
 ---
