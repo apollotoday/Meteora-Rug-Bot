@@ -295,7 +295,7 @@ async function writeTokenMintOutput(params: {
   await writeFile(absPath, JSON.stringify(payload, null, 2), "utf8");
 }
 
-async function main(): Promise<void> {
+export async function runTokenMint(): Promise<void> {
   const rpcUrl = process.env.RPC_URL?.trim() || clusterApiUrl("devnet");
   const rawSecret = getRequiredEnv("WALLET_SECRET_KEY");
 
@@ -394,8 +394,18 @@ async function main(): Promise<void> {
   console.log("========================================");
 }
 
-main().catch((err: unknown) => {
-  const message = err instanceof Error ? err.message : String(err);
-  console.error(`Setup failed: ${message}`);
-  process.exit(1);
-});
+function isMainModule(): boolean {
+  try {
+    return require.main === module;
+  } catch {
+    return true;
+  }
+}
+
+if (isMainModule()) {
+  runTokenMint().catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`Setup failed: ${message}`);
+    process.exit(1);
+  });
+}

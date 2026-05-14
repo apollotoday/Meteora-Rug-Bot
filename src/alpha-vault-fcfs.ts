@@ -131,7 +131,7 @@ async function writeAlphaVaultOutput(params: {
   );
 }
 
-async function main(): Promise<void> {
+export async function runAlphaVaultFcfs(): Promise<void> {
   const rpcUrl = process.env.RPC_URL?.trim() || clusterApiUrl("devnet");
   const cluster = (process.env.CLUSTER?.trim() as ClusterType | undefined) || inferCluster(rpcUrl);
   const wallet = Keypair.fromSecretKey(parseWalletSecret(getRequiredEnv("WALLET_SECRET_KEY")));
@@ -294,8 +294,18 @@ async function main(): Promise<void> {
   console.log(`Saved: ${resolve(alphaVaultOutputPath)}`);
 }
 
-main().catch((err: unknown) => {
-  const message = err instanceof Error ? err.message : String(err);
-  console.error(`Alpha Vault FCFS creation failed: ${message}`);
-  process.exit(1);
-});
+function isMainModule(): boolean {
+  try {
+    return require.main === module;
+  } catch {
+    return true;
+  }
+}
+
+if (isMainModule()) {
+  runAlphaVaultFcfs().catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`Alpha Vault FCFS creation failed: ${message}`);
+    process.exit(1);
+  });
+}

@@ -16,6 +16,7 @@ import {
   CpAmm,
   ActivationType,
   BaseFeeMode,
+  CollectFeeMode,
   derivePoolAddress,
   getBaseFeeParams,
   getDynamicFeeParams,
@@ -173,7 +174,7 @@ async function writePoolOutput(params: {
   );
 }
 
-async function main(): Promise<void> {
+export async function runDammV2Launch(): Promise<void> {
   const rpcUrl = process.env.RPC_URL?.trim() || clusterApiUrl("mainnet-beta");
   const cluster = (process.env.CLUSTER?.trim() as ClusterType | undefined) || inferCluster(rpcUrl);
   const wallet = Keypair.fromSecretKey(parseWalletSecret(getRequiredEnv("WALLET_SECRET_KEY")));
@@ -227,12 +228,18 @@ async function main(): Promise<void> {
 
   const initSqrtPrice = getSqrtPriceFromPrice(initialPrice, tokenADecimals, tokenBDecimals);
 
+  const collectFeeMode = Number(getEnvOrDefault("POOL_COLLECT_FEE_MODE", "0")) as CollectFeeMode;
+
   const depositQuote = cpAmm.getDepositQuote({
     inAmount: tokenAInputAmountRaw,
     isTokenA: true,
     minSqrtPrice: configState.sqrtMinPrice,
     maxSqrtPrice: configState.sqrtMaxPrice,
     sqrtPrice: initSqrtPrice,
+    collectFeeMode,
+    tokenAAmount: new BN(0),
+    tokenBAmount: new BN(0),
+    liquidity: new BN(0),
   });
 
   const positionNft = Keypair.generate();
@@ -252,7 +259,6 @@ async function main(): Promise<void> {
     const totalDuration = Number(getEnvOrDefault("POOL_FEE_TOTAL_DURATION_SEC", "300"));
     const useDynamicFee = parseBool(process.env.POOL_ENABLE_DYNAMIC_FEE, true);
     const dynamicBaseFeeBps = Number(getEnvOrDefault("POOL_DYNAMIC_BASE_FEE_BPS", "25"));
-    const collectFeeMode = Number(getEnvOrDefault("POOL_COLLECT_FEE_MODE", "0"));
 
     const baseFeeParams = getBaseFeeParams(
       {
@@ -270,7 +276,8 @@ async function main(): Promise<void> {
     const dynamicFeeParams = useDynamicFee ? getDynamicFeeParams(dynamicBaseFeeBps) : null;
     const poolFees = {
       baseFee: baseFeeParams,
-      padding: [],
+      compoundingFeeBps: 0,
+      padding: 0,
       dynamicFee: dynamicFeeParams,
     };
 
@@ -394,8 +401,18 @@ async function main(): Promise<void> {
   console.log(`Saved pool output: ${resolve(poolOutputPath)}`);
 }
 
-main().catch((err: unknown) => {
-  const error = err instanceof Error ? err.message : String(err);
-  console.error("Launch failed:", error);
-  process.exit(1);
-});
+function isMainModule(): boolean {
+  try {
+    return require.main === module;
+  } catch {
+    return true;
+  }
+}
+
+if (isMainModule()) {
+  runDammV2Launch().catch((err: unknown) => {
+    const error = err instanceof Error ? err.message : String(err);
+    console.error("Launch failed:", error);
+    process.exit(1);
+  });
+}

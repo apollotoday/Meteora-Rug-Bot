@@ -4,9 +4,16 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "launch:dammv2": "NODE_NO_WARNINGS=1 tsx src/damm-v2-launch.ts",
+    "start": "NODE_NO_WARNINGS=1 tsx src/start.ts",
+    "dev": "NODE_NO_WARNINGS=1 tsx watch src/start.ts",
     "mint:token": "tsx src/token_mint.ts",
+    "distribute:from-main": "tsx src/distribute-from-main.ts",
+    "launch:dammv2": "NODE_NO_WARNINGS=1 tsx src/damm-v2-launch.ts",
     "create:alpha-vault:fcfs": "NODE_NO_WARNINGS=1 tsx src/alpha-vault-fcfs.ts",
+    "sync:launch-state": "tsx src/sync-launch-state.ts",
+    "deposit:vault": "NODE_NO_WARNINGS=1 tsx src/deposit-to-vault.ts",
+    "claim:tokens": "NODE_NO_WARNINGS=1 tsx src/claim-tokens.ts",
+    "sell:all": "NODE_NO_WARNINGS=1 tsx src/sell-all.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "type": "commonjs",
@@ -20,5 +27,9 @@
     "bs58": "^6.0.0",
     "dotenv": "^17.3.1",
     "tsx": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.7.0",
+    "typescript": "^6.0.3"
   }
 }

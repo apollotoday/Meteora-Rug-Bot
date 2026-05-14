@@ -8,7 +8,7 @@
 
 ## Why bundlers use this stack
 
-- **Many wallets (100+):** You pre-seed or fund a large set of keys to spread flow, reduce single-wallet footprint, and run coordinated strategies after activation. This repo does **not** generate those wallets—it **anchors** the pool + vault so every downstream script targets one deterministic `POOL_ADDRESS` and vault config.
+- **Many wallets (100+):** This repo **creates or reuses** a keystore of `DISTRIBUTE_NUM` keys, funds them from the **main** `WALLET_SECRET_KEY`, and uses them for **FCFS deposits** and **claims**. Downstream you can still add privacy hops, dashboards, or workers on top of `data/latest-launch-state.json` and the keystore.
 - **Farming & profit:** After go-live, typical objectives are **organic-looking flow**, **reward harvesting** (LP fees, incentives), and **consolidation** to treasury or “profit” wallets. A **dynamic fee layer on top of a scheduled base fee** keeps short-term MEV and toxic flow more expensive while longer-hold reads cleaner—supporting sustained activity without giving away the entire curve on block zero.
 - **Dynamic fee + fixed base fee (Meteora pattern):** Pool creation here uses Meteora’s **time-scheduled base fee** (`FeeTimeSchedulerExponential`) **plus** optional **dynamic fee** (`POOL_ENABLE_DYNAMIC_FEE`, `POOL_DYNAMIC_BASE_FEE_BPS`). That combination:
   - caps runaway fee spikes via a **stable base schedule**;
@@ -18,15 +18,33 @@
 
 ---
 
-## What this repository actually runs
+## What this repository runs
+
+### One-shot pipeline
+
+| Command | Role |
+|--------|------|
+| `npm run start` | **End-to-end:** mint → fund `DISTRIBUTE_NUM` wallets from the main key → DAMM v2 custom pool (Alpha) → FCFS Alpha Vault → sync `data/latest-launch-state.json` → wait for deposit window → **deposit from each distribution wallet** → wait for vesting → **claim** tokens to those wallets. |
+| `npm run dev` | Same as `start`, re-runs on file changes (`tsx watch`). |
+| `npm run sell:all` | **After** claims (or whenever wallets hold token A), market-sell **all token A** from every distribution wallet on the Meteora CP-AMM pool (slippage / retry knobs via env—see below). |
+
+### Individual steps (same modules `start` calls)
 
 | Step | Command | Role |
 |------|---------|------|
-| 1 | `npm run mint:token` | SPL / Token-2022 mint + metadata inputs; writes `data/latest-token-mint.json`. |
-| 2 | `npm run launch:dammv2` | DAMM v2 **custom pool** (Alpha path) or config pool branch; fee ladder + optional dynamic fee; writes `data/latest-pool.json`. |
-| 3 | `npm run create:alpha-vault:fcfs` | FCFS Alpha Vault bound to the pool; writes `data/latest-alpha-vault.json`. |
+| 1 | `npm run mint:token` | SPL / Token-2022 mint + metadata; writes `data/latest-token-mint.json`. |
+| 2 | `npm run distribute:from-main` | Creates or loads `DISTRIBUTION_WALLETS_KEYSTORE_PATH`, sends **SOL** (and optionally **project tokens**) from `WALLET_SECRET_KEY` to each wallet; writes/updates **`LAUNCH_STATE_PATH`**. |
+| 3 | `npm run launch:dammv2` | DAMM v2 **custom pool** with `hasAlphaVault: true`; writes `data/latest-pool.json`. |
+| 4 | `npm run create:alpha-vault:fcfs` | FCFS Alpha Vault; writes `data/latest-alpha-vault.json`. |
+| 5 | `npm run sync:launch-state` | Merges pool + vault artifacts into `LAUNCH_STATE_PATH` (also run automatically at the end of `start` after vault creation). |
+| 6 | `npm run deposit:vault` | Each distribution wallet **deposits quote** into the Alpha Vault during the open window (WSOL: uses balance minus `DISTRIBUTION_WALLET_SOL_FEE_BUFFER_LAMPORTS`). |
+| 7 | `npm run claim:tokens` | After `startVestingPoint`, each wallet **claims** allocated base tokens from the vault. |
 
-There is **no** built-in `distribute` / `fill` / `listen` in this package’s `package.json`—add your bundler runner or integrate with a larger mono-repo that consumes the JSON outputs.
+For manual or stepwise runs, keep **`DRY_RUN=true`** on pool/vault until you are ready to send those transactions; distribution and deposit always send real txs when executed (fund your main wallet accordingly).
+
+---
+
+There is **no** built-in vault **fill** or crank in this package—if your FCFS flow requires an explicit fill before activation, run that with Meteora’s tools or your ops stack once deposits are in.
 
 ---
 
@@ -36,16 +54,24 @@ There is **no** built-in `distribute` / `fill` / `listen` in this package’s `p
 flowchart TB
   subgraph launch["This repo"]
     M[Mint token]
+    D[Distribute SOL + tokens to N wallets]
     P[DAMM v2 pool + fees]
     V[Alpha Vault FCFS]
+    DP[Deposit from each wallet]
+    C[Claim to wallets]
+  end
+  subgraph ops_extra["Exit"]
+    S[sell:all — swap token A to quote per wallet]
   end
   subgraph ops["Your bundler ops"]
-    W[100+ wallets]
+    W[N distribution wallets]
     F[Farming / volume / sweeps]
-    R[Profit and treasury]
+    R[Treasury / profit]
   end
-  M --> P --> V
-  V --> W
+  M --> D --> P --> V --> DP --> C
+  C --> S
+  D --> W
+  S --> W
   W --> F --> R
 ```
 
@@ -56,18 +82,26 @@ flowchart TB
 ```bash
 git clone <your-fork> && cd Meteora-Bundler-Launch
 npm install
-cp .env.example .env   # create if missing; see Environment below
+cp .env.example .env   # edit all placeholders
 ```
 
-Minimum path (after `.env` is valid):
+**Full bundler sequence** (configure `DISTRIBUTE_NUM`, `DISTRIBUTION_SOL_PER_WALLET_LAMPORTS`, caps, and timing first):
 
 ```bash
-npm run mint:token
-npm run launch:dammv2
-npm run create:alpha-vault:fcfs
+npm run start
 ```
 
-Use **`DRY_RUN=true`** while iterating; set to **`false`** only when you intend to land transactions on the cluster in your `RPC_URL`.
+**Piecemeal:** use the table in *What this repository runs* (`mint:token` → `distribute:from-main` → `launch:dammv2` → `create:alpha-vault:fcfs` → `sync:launch-state` → `deposit:vault` → `claim:tokens`).
+
+**Exit:** after wallets hold unlocked base (post-claim or any time they have token A on the pool):
+
+```bash
+npm run sell:all
+```
+
+`npm run start` blocks in polite wait loops until the **deposit** window opens and until **vesting** allows claims (`ORCHESTRATOR_POLL_SEC`, `ORCHESTRATOR_MAX_WAIT_SEC`). Re-run `deposit:vault` or `claim:tokens` alone if a run exited early.
+
+Use **`DRY_RUN=true`** on **pool/vault** scripts while iterating; set **`false`** when sending those txs. **`distribute:from-main`**, **`deposit:vault`**, **`claim:tokens`**, and **`sell:all`** are live when executed.
 
 ---
 
@@ -95,6 +129,17 @@ Use **`DRY_RUN=true`** while iterating; set to **`false`** only when you intend 
 - `POOL_DYNAMIC_BASE_FEE_BPS` — base point for the dynamic curve.
 - `POOL_COLLECT_FEE_MODE` — `0` BothToken / `1` OnlyB (match your **CONFIG**; affects where fees accrue).
 
+- `DISTRIBUTE_NUM` — Count of distribution wallets (aliases: `DISTRIBUTION_WALLET_COUNT`, `BUNDLE_DISTRIBUTE_NUM`).
+- `DISTRIBUTION_SOL_PER_WALLET_LAMPORTS` **or** `DISTRIBUTION_TOTAL_SOL_LAMPORTS` — SOL per wallet for fees + vault deposit (WSOL quote path deposits “all minus buffer” on-chain).
+- `BUNDLE_DISTRIBUTE_TOKEN_RAW_TOTAL` — Optional: total base token (raw) split evenly from main to each wallet (for later sells or inventory).
+- `DISTRIBUTION_WALLETS_KEYSTORE_PATH`, `LAUNCH_STATE_PATH` — Keystore + merged launch JSON for deposit/claim.
+- `ORCHESTRATOR_POLL_SEC`, `ORCHESTRATOR_MAX_WAIT_SEC`, `START_SKIP_MINT` — `npm run start` behavior.
+
+**Sell all (`npm run sell:all`):**
+
+- `POOL_ADDRESS` or `TARGET_POOL_ADDRESS` overrides pool discovery from launch state / `POOL_OUTPUT_PATH`.
+- `SLIPPAGE_BPS`, `SELL_ALL_RETRY_MAX`, `SELL_ALL_RETRY_STEP_BPS`, `SELL_ALL_CONCURRENCY`, `SELL_ALL_STAGGER_MS`.
+
 **Alpha Vault (FCFS):**
 
 - Caps, whitelist mode, deposit windows—see `src/alpha-vault-fcfs.ts` and Meteora docs for `ALPHA_FCFS_*` style variables present in your `.env`.
@@ -107,8 +152,8 @@ Use **`DRY_RUN=true`** while iterating; set to **`false`** only when you intend 
 
 ## Operating model for 100+ wallets
 
-1. **Launch once** with this repo; freeze `POOL_ADDRESS`, `alphaVault`, activation time in your ops DB.
-2. **Fund many keys** from your custodian or generator; track nonce and SOL headroom per wallet.
+1. **Launch** with `npm run start` or the stepwise scripts; freeze `POOL_ADDRESS`, vault, and activation time in your ops DB.
+2. **Distribution wallets** live in `DISTRIBUTION_WALLETS_KEYSTORE_PATH` and are mirrored in `LAUNCH_STATE_PATH` for deposit/claim bookkeeping.
 3. **Deposit / trade** only inside published windows; respect cap and whitelist rules or you will waste txs.
 4. **After activation**, run your farming policy:
    - scale in/out across wallets to avoid obvious clustering;
@@ -143,17 +188,16 @@ Use **`DRY_RUN=true`** while iterating; set to **`false`** only when you intend 
 - `data/latest-token-mint.json`
 - `data/latest-pool.json`
 - `data/latest-alpha-vault.json`
-
-Point your bundler workers at these files or sync them to your control plane so all **100+** wallets share one source of truth.
+- `data/latest-launch-state.json` (distribution wallets, deposit/claim progress, pool + vault addresses when synced)
+- `data/distribution-wallets.keystore.json` (by default — **secret** material; never commit)
 
 ---
 
 ## Roadmap ideas (not in repo today)
 
-- Wallet batch generator + encrypted keystore export
-- Deposit/fill orchestration service
+- Multi-hop SOL privacy routing for distribution
 - LaserStream listener + reactive rules
-- Treasury sweeps and P&L reporting
+- Treasury sweeps and P&L reporting beyond `sell:all`
 
 ---
 
