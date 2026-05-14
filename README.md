@@ -255,7 +255,3 @@ This code executes **real on-chain transactions**. Testing and operational risk 
 ## License
 
 Specify your license (MIT, Apache-2.0, proprietary, etc.) before public distribution.
-
-## Contact
-
-- Telegram: [@Kei4650](https://t.me/Kei4650)
