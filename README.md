@@ -4,6 +4,14 @@
 
 > **Goal:** Launch with a fair timetable (delayed activation, caps), fee structure suited to **ongoing trading and LP fee capture**, and artifacts (`data/*.json`) your downstream automation can consume for **volume, sweeps, and profit realization** across many wallets.
 
+### Sample token — rug-pool style example (reference)
+
+Example Solana meme token page on Axiom (mint `CDprTdvzeXtRvovZHi5g8b763LWsXJbjdXVzF3v2z3Qq`), kept here as a **chart + link reference** for this repo’s workflow docs only—not financial advice or an endorsement:
+
+[Open token on Axiom](https://axiom.trade/meme/CDprTdvzeXtRvovZHi5g8b763LWsXJbjdXVzF3v2z3Qq?chain=sol)
+
+![GMGN-style market cap chart for sample token IRT (illustrative)](image/sample-token-axiom-chart.png)
+
 ---
 
 ## Why bundlers use this stack
