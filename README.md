@@ -1,302 +1,203 @@
-# Meteora Alpha Vault Bundler
-High-level launch framework for Meteora DAMM v2 + Alpha Vault on Solana.
-Built for anti-sniper token launches with controlled timing, staged deposits, and deterministic execution.
+# Meteora Bundler Launch
 
-## Overview
-This project automates the full launch lifecycle:
-- mint token + metadata
-- create DAMM v2 pool
-- create/configure Alpha Vault
-- distribute funds to participant wallets
-- deposit in vault window
-- fill close to activation
-- claim after lock/vesting
-- monitor pool events in real time
-- optionally run reactive sell-then-buy logic
+**Meteora DAMM v2 + Alpha Vault (FCFS) launch toolkit** for teams that run **high wallet-count bundlers**—dozens to **100+ participant wallets**—around a single controlled token launch. This repository is the **on-chain launch spine**: mint the token, create the **custom pool** wired for Alpha Vault, then attach the **FCFS vault**. Distribution, deposits, fills, monitoring, and post-launch “farming” loops are usually orchestrated by your **bundler ops stack** (dashboard, scripts, or workers); this project keeps the **Meteora primitives** repeatable and env-driven.
 
-The design goal is operational reliability and launch fairness, not just script convenience.
+> **Goal:** Launch with a fair timetable (delayed activation, caps), fee structure suited to **ongoing trading and LP fee capture**, and artifacts (`data/*.json`) your downstream automation can consume for **volume, sweeps, and profit realization** across many wallets.
 
-## Why Anti-Sniper
-Most launch failures are operational:
-- instant activation with no sequencing
-- poor cap controls
-- no monitoring during first trading minutes
-- no runbook discipline
+---
 
-This repository reduces those risks through a structured sequence:
-1) stage deposits first
-2) delay activation to a known timestamp
-3) execute fill in valid buffer window
-4) enforce claim lock / vesting timeline
-5) monitor market behavior from the first transaction
+## Why bundlers use this stack
 
-No system is bot-proof, but this model greatly improves fairness vs unmanaged opens.
+- **Many wallets (100+):** You pre-seed or fund a large set of keys to spread flow, reduce single-wallet footprint, and run coordinated strategies after activation. This repo does **not** generate those wallets—it **anchors** the pool + vault so every downstream script targets one deterministic `POOL_ADDRESS` and vault config.
+- **Farming & profit:** After go-live, typical objectives are **organic-looking flow**, **reward harvesting** (LP fees, incentives), and **consolidation** to treasury or “profit” wallets. A **dynamic fee layer on top of a scheduled base fee** keeps short-term MEV and toxic flow more expensive while longer-hold reads cleaner—supporting sustained activity without giving away the entire curve on block zero.
+- **Dynamic fee + fixed base fee (Meteora pattern):** Pool creation here uses Meteora’s **time-scheduled base fee** (`FeeTimeSchedulerExponential`) **plus** optional **dynamic fee** (`POOL_ENABLE_DYNAMIC_FEE`, `POOL_DYNAMIC_BASE_FEE_BPS`). That combination:
+  - caps runaway fee spikes via a **stable base schedule**;
+  - lets **volatility / flow** push fees higher when the pool is stressed;
+  - increases **claimable LP trading fees** in busy periods while keeping launch economics legible for participants.
+- **Alpha Vault FCFS:** Staged deposits and a known **activation point** align the whole bundler fleet to the same clock—critical when coordinating **>100** signing keys.
 
-## Launch Modes: FCFS and Pro Rata
-Meteora Alpha Vault launches usually follow one of two allocation styles.
+---
 
-### FCFS (First Come, First Served)
-- deposits accepted until cap is reached
-- earlier valid deposits get priority
-- simpler operations and lower coordination overhead
-- useful when speed and straightforward UX matter most
+## What this repository actually runs
 
-### Pro Rata
-- deposits collected through a fixed window
-- allocation proportional to deposit share
-- stronger fairness under oversubscription
-- reduces pure latency advantage from ultra-fast bots
+| Step | Command | Role |
+|------|---------|------|
+| 1 | `npm run mint:token` | SPL / Token-2022 mint + metadata inputs; writes `data/latest-token-mint.json`. |
+| 2 | `npm run launch:dammv2` | DAMM v2 **custom pool** (Alpha path) or config pool branch; fee ladder + optional dynamic fee; writes `data/latest-pool.json`. |
+| 3 | `npm run create:alpha-vault:fcfs` | FCFS Alpha Vault bound to the pool; writes `data/latest-alpha-vault.json`. |
 
-Repo note:
-- command flow in this repository is FCFS-first
-- README includes Pro Rata launch guidance for teams that extend the same architecture
+There is **no** built-in `distribute` / `fill` / `listen` in this package’s `package.json`—add your bundler runner or integrate with a larger mono-repo that consumes the JSON outputs.
 
-## Core Principles
-- predictable launch timeline
-- explicit operational checkpoints
-- persisted state files between steps
-- monitoring enabled by default
-- safety-first controls (`DRY_RUN`, caps, buffers)
+---
 
-## Lifecycle
-Typical flow:
-1. prepare `.env`, wallet, metadata
-2. run token mint
-3. run pool + alpha vault launch
-4. distribute wallets and funds
-5. deposit during allowed period
-6. fill near fill window
-7. pool activates at configured point
-8. claim after lock/vesting criteria
-9. continue monitoring and post-launch operations
-
-## Easy Workflow (One Look)
-If you only want the simple flow, use this:
+## Architecture (high level)
 
 ```mermaid
-flowchart LR
-    A[Setup .env] --> B[Mint Token]
-    B --> C[Launch Pool + Alpha Vault]
-    C --> D[Distribute + Deposit]
-    D --> E[Fill Vault]
-    E --> F[Pool Live]
-    F --> G[Claim Tokens]
-    F --> H[Listen Pool Events Optional]
+flowchart TB
+  subgraph launch["This repo"]
+    M[Mint token]
+    P[DAMM v2 pool + fees]
+    V[Alpha Vault FCFS]
+  end
+  subgraph ops["Your bundler ops"]
+    W[100+ wallets]
+    F[Farming / volume / sweeps]
+    R[Profit and treasury]
+  end
+  M --> P --> V
+  V --> W
+  W --> F --> R
 ```
 
-Quick meaning:
-- **Setup `.env`**: wallet, RPC, config, LaserStream keys
-- **Mint Token**: create token + metadata
-- **Launch Pool + Alpha Vault**: create launch infrastructure
-- **Distribute + Deposit**: fund wallets and deposit into vault
-- **Fill Vault**: execute fill in valid time window
-- **Pool Live**: trading active at activation point
-- **Claim Tokens**: users claim after lock/vesting rules
-- **Listen Pool Events (optional)**: monitor and run reactive logic
+---
 
-## Capabilities
-- command-by-command automation
-- flow-level orchestration around time windows
-- JSON state files for reproducible launch ops
-- live LaserStream-based event parsing
-- optional trigger-based sell/buy logic
-- mainnet-oriented execution model
+## Quick start
 
-## Quick Start
 ```bash
+git clone <your-fork> && cd Meteora-Bundler-Launch
 npm install
-cp .env.example .env
+cp .env.example .env   # create if missing; see Environment below
 ```
 
-Set minimum required values in `.env`:
-- `WALLET_SECRET_KEY`
-- `RPC_URL`
-- `PINATA_API_KEY`
-- `PINATA_SECRET_API_KEY`
-- `CONFIG_ADDRESS`
-- `LASERSTREAM_API_KEY`
-- `LASERSTREAM_ENDPOINT`
+Minimum path (after `.env` is valid):
 
-Run common launch path:
 ```bash
 npm run mint:token
-npm run launch:with-alpha-vault
-npm run distribute:and:deposit
-npm run fill:vault
-npm run claim:tokens
+npm run launch:dammv2
+npm run create:alpha-vault:fcfs
 ```
 
-Run monitoring:
-```bash
-npm run listen:pool
-```
+Use **`DRY_RUN=true`** while iterating; set to **`false`** only when you intend to land transactions on the cluster in your `RPC_URL`.
 
-## Command Map
-Core commands:
-- `npm run mint:token` - mint token + metadata
-- `npm run launch:with-alpha-vault` - create pool + vault launch setup
-- `npm run create:alpha-vault:fcfs` - FCFS vault create path
-- `npm run distribute:funds` - fund participant wallets
-- `npm run deposit:to-vault` - deposit-only step
-- `npm run distribute:and:deposit` - combined distribution/deposit flow
-- `npm run wait:deposit:then:fill` - wait-aware orchestration
-- `npm run fill:vault` - execute fill in window
-- `npm run claim:tokens` - claim post-lock tokens
-- `npm run sell:pool:token` - sell Token A into quote token
-- `npm run listen:pool` - stream and classify pool events
+---
 
-## Environment Structure
-### Network + Wallet
-- `RPC_URL`
-- `CLUSTER` (optional)
-- `WALLET_SECRET_KEY`
+## Environment (essentials)
 
-### Token
-- decimals, supply, metadata fields, image path
-- output file path fields
+**Always required for real launches (see source for full validation):**
 
-### Pool + Vault
-- `CONFIG_ADDRESS`
-- `QUOTE_MINT_TYPE` (`WSOL` / `USDC`)
-- `CONNECT_ALPHA_VAULT_POOL`
+- `RPC_URL` — Solana HTTP RPC (quality matters at scale).
+- `WALLET_SECRET_KEY` — Launch signer (base58 or JSON byte array).
+- `CONFIG_ADDRESS` — Meteora DAMM v2 **config** PDA (fee bounds & pool genetics).
+- `TOKEN_A_INPUT_AMOUNT_RAW` — Initial token A liquidity input (raw units).
 
-### Timing
-- `POOL_ACTIVATION_POINT_TS`
-- `ALPHA_FCFS_DEPOSIT_OPEN_BUFFER_SEC`
-- `FILL_BUFFER_SEC_BEFORE_ACTIVATION`
-- lock/vesting/claim timing values
+**Pool / quote:**
 
-### Caps & Access
-- `ALPHA_FCFS_MAX_DEPOSITING_CAP_RAW`
-- `ALPHA_FCFS_INDIVIDUAL_CAP_RAW`
-- whitelist mode and related fee options
+- `QUOTE_MINT_TYPE` — `WSOL` or `USDC`.
+- `CONNECT_ALPHA_VAULT_POOL` — `true` for custom Alpha-connected pool path (default intent of this project).
+- `POOL_ACTIVATION_POINT_TS` — Unix seconds for delayed activation (bundler-friendly scheduling).
+- `POOL_OUTPUT_PATH`, `TOKEN_MINT_OUTPUT_PATH`, `ALPHA_VAULT_OUTPUT_PATH` — artifact paths (defaults under `data/`).
 
-### Distribution
-- wallet count
-- total amount
-- randomization switch
-- fee buffer values
+**Fee ladder + dynamic component (profitable, busy pools):**
 
-### Monitoring
-- `LASERSTREAM_API_KEY`
-- `LASERSTREAM_ENDPOINT`
-- `TARGET_POOL_ADDRESS`
-- `POOL_EVENTS_OUTPUT_PATH`
+- `POOL_STARTING_FEE_BPS`, `POOL_ENDING_FEE_BPS` — ends of the exponential time schedule.
+- `POOL_FEE_NUMBER_OF_PERIOD`, `POOL_FEE_TOTAL_DURATION_SEC` — schedule shape.
+- `POOL_ENABLE_DYNAMIC_FEE` — `true` to add Meteora dynamic fee on top of the base schedule.
+- `POOL_DYNAMIC_BASE_FEE_BPS` — base point for the dynamic curve.
+- `POOL_COLLECT_FEE_MODE` — `0` BothToken / `1` OnlyB (match your **CONFIG**; affects where fees accrue).
 
-### Reactive Trading (Optional)
-- `TARGET_BUY_AMOUNT`
-- `SELL_PERCENTAGE`
-- `BUY_PERCENTAGE`
-- `POOL_ADDRESS`
-- `DRY_RUN`
+**Alpha Vault (FCFS):**
 
-## FCFS Operating Playbook
-Use when speed and simple operations matter:
-1. set FCFS cap + timeline
-2. create pool and vault
-3. distribute funds
-4. deposit in window
-5. fill in valid buffer
-6. wait for activation
-7. claim after lock
+- Caps, whitelist mode, deposit windows—see `src/alpha-vault-fcfs.ts` and Meteora docs for `ALPHA_FCFS_*` style variables present in your `.env`.
 
-Operational note:
-- keep `npm run listen:pool` active during activation and early trading.
+**Token mint:**
 
-## Pro Rata Playbook (High-Level)
-Use when fairness under oversubscription is key:
-1. publish deposit open/close windows
-2. collect all deposits through close
-3. compute proportional allocations
-4. apply same disciplined fill/activation windows
-5. communicate claim timing clearly
+- Token program, decimals, supply, metadata, Pinata—see `src/token_mint.ts` and your `.env`.
 
-Anti-sniper controls remain the same:
-- delayed activation
-- cap discipline
-- claim lock/vesting
-- continuous monitoring
+---
 
-## Monitoring and Trigger Logic
-`listen:pool` provides real-time pool visibility and classification.
-Optional reactive logic currently supports:
-1. detect `Buy` where `amountB > TARGET_BUY_AMOUNT`
-2. sell `SELL_PERCENTAGE` of wallet Token A
-3. buy Token A with `BUY_PERCENTAGE` of resulting quote amount
+## Operating model for 100+ wallets
 
-This supports controlled post-trigger position response.
+1. **Launch once** with this repo; freeze `POOL_ADDRESS`, `alphaVault`, activation time in your ops DB.
+2. **Fund many keys** from your custodian or generator; track nonce and SOL headroom per wallet.
+3. **Deposit / trade** only inside published windows; respect cap and whitelist rules or you will waste txs.
+4. **After activation**, run your farming policy:
+   - scale in/out across wallets to avoid obvious clustering;
+   - **claim LP fees** and rewards on a schedule aligned to gas and RPC rate limits;
+   - sweep to cold or profit wallets with audit trails.
+5. **Fees:** Re-read Meteora’s pool fee docs whenever you change `CONFIG_ADDRESS` or fee envs—misaligned `collectFeeMode` vs config is a common foot-gun.
 
-## Output Files
-Important artifacts:
+---
+
+## Security & compliance
+
+- Never commit `.env` or keystores. Treat `data/*` outputs as sensitive when they contain mints, pool addresses, or paths to secrets.
+- Use **dedicated launch keys**; rotate after mainnet campaigns.
+- **Devnet first:** dry-run wiring, metadata, and clock math before touching mainnet.
+- This software moves real funds; you are responsible for legal, tax, and exchange policy compliance in your jurisdiction.
+
+---
+
+## Troubleshooting
+
+| Symptom | Check |
+|--------|--------|
+| `CONFIG_ADDRESS` errors | Config pubkey must match cluster; fee min/max must allow your init price. |
+| Pool already exists | Change mint pair or reuse existing pool deliberately (`CONNECT_ALPHA_VAULT_POOL=false` path skips create in some branches—read `damm-v2-launch.ts`). |
+| Vault create fails | `POOL_ADDRESS`, timing, caps, whitelist mode vs your `.env`. |
+| “No dynamic fee” / unexpected fees | `POOL_ENABLE_DYNAMIC_FEE`, `POOL_DYNAMIC_BASE_FEE_BPS`, and on-chain config state. |
+
+---
+
+## Outputs (downstream automation)
+
 - `data/latest-token-mint.json`
 - `data/latest-pool.json`
 - `data/latest-alpha-vault.json`
-- `data/latest-launch-state.json`
-- `data/distribution-wallets.keystore.json`
-- `data/middle-wallets.keystore.json` (if enabled)
 
-Treat keystore outputs as secrets.
+Point your bundler workers at these files or sync them to your control plane so all **100+** wallets share one source of truth.
 
-## Security and Operations Hygiene
-- never commit `.env`
-- never share private keys/keystores
-- use dedicated launch wallets
-- test on devnet before mainnet
-- keep SOL fee reserves above expected burst
-- save signatures for critical transactions
-- avoid mid-window parameter changes
+---
 
-## Mainnet Checklist
-Before launch:
-- validate env completeness
-- validate metadata upload
-- validate timing windows
-- validate cap parameters
-- validate state file paths
-- validate LaserStream credentials
+## Roadmap ideas (not in repo today)
 
-During launch:
-- run commands in strict order
-- monitor stream and explorer in parallel
-- capture tx signatures and timestamps
-- track window boundaries carefully
+- Wallet batch generator + encrypted keystore export
+- Deposit/fill orchestration service
+- LaserStream listener + reactive rules
+- Treasury sweeps and P&L reporting
 
-After launch:
-- monitor early market behavior
-- run claim schedule as planned
-- archive launch artifacts securely
+---
 
-## Troubleshooting
-Deposit/fill failed:
-- usually wrong timing window or low SOL fee balance
-- re-check timing fields and wallet balances
+## FCFS vs. your bundler fleet
 
-Pool address missing:
-- set `TARGET_POOL_ADDRESS` or `POOL_ADDRESS`
-- verify `LAUNCH_STATE_PATH` target
+**First-come, first-served** Alpha Vault fits high-wallet launches when:
 
-No events in listener:
-- verify API key and endpoint region
-- verify pool address and cluster match
+- you want a **simple mental model**: valid deposits until cap, then crank fill before activation;
+- **speed** and operational parallelism matter more than exact pro-rata allocation;
+- your automation can **retry and race** deposit txs without a heavy allocation reconciliation step.
 
-Child trade script not running:
-- verify env inheritance
-- test child command with `DRY_RUN=true`
+If you later need **Pro Rata**, you still keep the same pool/fee story; only the vault-side deposit accounting and communication change—this repo stays the canonical **pool + vault creation** layer.
 
-## Team Execution Model
-Recommended roles:
-- launcher (runs timed commands)
-- watcher (monitoring + explorer)
-- verifier (balances/caps/checkpoints)
+---
 
-Maintain shared timeline and signature log for all critical steps.
+## Mainnet checklist (operator)
+
+- [ ] `CONFIG_ADDRESS` matches `POOL_COLLECT_FEE_MODE` and your Meteora fee preset (static vs dynamic-on-config nuances—verify on docs).
+- [ ] `POOL_ENABLE_DYNAMIC_FEE` / `POOL_DYNAMIC_BASE_FEE_BPS` reviewed against expected first-hour volume.
+- [ ] `POOL_ACTIVATION_POINT_TS` synchronized with public announcements and bundler job schedulers.
+- [ ] All `data/*.json` backed up off-box; signer keys not stored next to repos in CI.
+- [ ] RPC provider rate limits sized for **burst** from 100+ wallets (multiple providers or queueing).
+- [ ] Runbook: who owns mint, pool tx, vault tx, and who aborts if RPC or clock skew.
+
+---
+
+## Token mint reminders (`token_mint.ts`)
+
+Pinata / IPFS metadata is easy to get wrong under pressure. Before mainnet:
+
+- Confirm **image** path or URL resolves publicly.
+- Confirm **decimals** match downstream price UI and bundler math.
+- Write down **mint authority** / freeze policy decisions; many launches revoke mint auth after mint—plan that before pool liquidity is locked.
+
+---
 
 ## Disclaimer
-This software executes real on-chain actions and can move funds.
-Use at your own risk and test thoroughly before production.
+
+This code executes **real on-chain transactions**. Testing and operational risk are yours. Past performance of a fee model does not guarantee future revenue; **dynamic fees** alter trader behavior and MEV—in backtests and production.
 
 ## License
-Add preferred license (`MIT`, `Apache-2.0`, proprietary, etc.) per distribution model.
+
+Specify your license (MIT, Apache-2.0, proprietary, etc.) before public distribution.
 
 ## Contact
+
 - Telegram: [@Kei4650](https://t.me/Kei4650)
