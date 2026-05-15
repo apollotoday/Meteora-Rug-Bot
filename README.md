@@ -1,4 +1,4 @@
-# Meteora Bundler Launch
+# Meteora Rug Bot
 
 **Meteora DAMM v2 + Alpha Vault (FCFS) launch toolkit** for teams that run **large wallet-count bundlers**—from a handful to **100+ wallets, and well beyond** (there is no hard cap in the tooling; set `DISTRIBUTE_NUM` to match your bundle size). This repository is the **on-chain launch spine**: mint the token, create the **custom pool** wired for Alpha Vault, then attach the **FCFS vault**. The same **distribution wallet fleet** is what you use for **vault deposits, claims, bulk exits (`sell:all`), and downstream farming** (LP positions, incentive claims, volume and sweeps)—while your **bundler ops stack** (dashboard, workers, schedulers) runs the longer-lived loops; this project keeps the **Meteora primitives** repeatable and env-driven.
 
